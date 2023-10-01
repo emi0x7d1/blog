@@ -215,7 +215,7 @@ fn App(cx: Scope) -> Element {
 }
 ```
 
-I would expect RA suggesting the prop `width` but we don't. We get arbitrary statements.
+I would expect RA to suggest the prop `width` but it doesn't. It suggests arbitrary statements.
 
 ![RA not suggesting `Box` props](./ra-not-suggesting-box-props.png)
 
