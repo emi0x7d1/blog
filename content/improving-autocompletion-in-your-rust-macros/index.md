@@ -347,3 +347,9 @@ We then would get correct suggestions.
 
 We compromised aesthetics for ergonomics (I atleast think so) in a place where
 some completions are very much needed for fast development.
+
+---
+
+References:
+
+- [Discussion on GH](https://github.com/rust-lang/rust-analyzer/discussions/15452)

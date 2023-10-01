@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+<meta content="IE=edge" http-equiv="X-UA-Compatible"/>
+<meta content="text/html; charset=UTF-8" http-equiv="content-type"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<meta name="robots" content="index, follow">
+
+
+
+
+
+
+
+
+
+
+
+
+<title>Improving autocompletion in your Rust macros</title>
+
+
+
+<meta name="title" content="Improving autocompletion in your Rust macros">
+
+
+<meta name="author" content="[object]">
+
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://blog.emi0x7d1.dev/improving-autocompletion-in-your-rust-macros/">
+
+<meta property="og:site_name" content="">
+
+
+<meta property="og:title" content="Improving autocompletion in your Rust macros">
+
+
+
+
+
+<meta property="twitter:card" content="summary_large_image">
+<meta property="twitter:url" content="https://blog.emi0x7d1.dev/improving-autocompletion-in-your-rust-macros/">
+
+<meta property="twitter:title" content="Improving autocompletion in your Rust macros">
+
+
+
+
+<link rel="canonical" href="https://blog.emi0x7d1.dev/improving-autocompletion-in-your-rust-macros/">
+
+
+
+
+<link rel="stylesheet" href="https://blog.emi0x7d1.dev/css/style.css"/>
+
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        
+<script>
+  const setTheme = (theme) => {
+      document.documentElement.className = theme;
+      localStorage.setItem('theme', theme);
+  }
+  const getTheme = () => {
+      const theme = localStorage.getItem('theme');
+      theme && setTheme(theme);
+  }
+  getTheme()
+</script>
+      </header>
+      <main>
+        
+<h1>Improving autocompletion in your Rust macros</h1>
+
+
+
+<span id="continue-reading"></span><h2 id="understanding-rust-analyzer-autocompletion-in-macro-invokations">Understanding Rust Analyzer autocompletion in macro invokations.</h2>
+<p>Lets start with a simple macro:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">struct </span><span>Foo {
+</span><span>    </span><span style="color:#bf616a;">bar</span><span>: </span><span style="color:#b48ead;">i32</span><span>,
+</span><span>}
+</span><span>
+</span><span style="color:#96b5b4;">macro_rules! </span><span>create_foo {
+</span><span>    (</span><span style="color:#bf616a;">$field</span><span>:</span><span style="color:#b48ead;">ident</span><span>) =&gt; {{
+</span><span>        Foo {
+</span><span>            </span><span style="color:#bf616a;">$field</span><span>: </span><span style="color:#d08770;">10</span><span>,
+</span><span>        };
+</span><span>    }}
+</span><span>}
+</span></code></pre>
+<p>And lets say you are invoking this macro like this (where <code>|</code> is your cursor):</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span>create_foo! {
+</span><span>    |
+</span><span>}
+</span></code></pre>
+<p>and then you ask RA for completions. For RA to suggest you things that make sense it more or less does the following:</p>
+<p>It expands <code>create_foo</code> but adds a dummy identifier where your cursor is. So what it actually expands is:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span>create_foo! {
+</span><span>    intellijRulezz
+</span><span>}
+</span></code></pre>
+<p>where <code>intellijRulezz</code> is the dummy identifier. Then the macro gets expanded to:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span>{
+</span><span>    Foo {
+</span><span>        intellijRulezz: </span><span style="color:#d08770;">10</span><span>,
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>Then RA uses the position of <code>intellijRulezz</code> as context to know what to
+suggest. In this case, <code>intellijRulezz</code> landed on a field position, so it will
+suggest <code>Foo</code>'s fields.</p>
+<p><img src="https://blog.emi0x7d1.dev/improving-autocompletion-in-your-rust-macros/./ra-completing-foo-fields.png" alt="Rust Analyzer suggesting Foo's fields" /></p>
+<p>RA uses the same context for other actions such as <code>Rename</code>.</p>
+<p><video src="./renaming-foo-field.mp4" autoplay muted loop style="width: 100%;"></video></p>
+<h3 id="what-if-the-token-expands-to-two-different-places">What if the token expands to two different places?</h3>
+<p>If we have the following macro</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#96b5b4;">macro_rules! </span><span>foo {
+</span><span>    (</span><span style="color:#bf616a;">$bar</span><span>:</span><span style="color:#b48ead;">ident</span><span>) =&gt; {{
+</span><span>        </span><span style="color:#b48ead;">use </span><span>std::fs::</span><span style="color:#bf616a;">$bar</span><span>;
+</span><span>        </span><span style="color:#b48ead;">use </span><span>std::io::</span><span style="color:#bf616a;">$bar</span><span>;
+</span><span>    }}
+</span><span>}
+</span></code></pre>
+<p><strong>Rust Analyzer will just take into account the first usage of the macro and ignore the others</strong>.</p>
+<h3 id="what-about-procedural-macros">What about procedural macros?</h3>
+<p>RA does the same thing for procedural macros but it actually expands the macro
+twice, with and without the dummy identifier and uses both expansions to know the context.</p>
+<p>I don't understand much how this works but I've found that if both expansions
+differ by too much, you don't get suggestions but you get them as soon as you
+type something because now both expansions include an identifier (what you typed
+and the dummy identifier).</p>
+<p>So with this very simplified explanation, lets see what we can do to make our
+macros more Rust Analyzer-friendly.</p>
+<h2 id="basic-things-you-need-to-do">Basic things you need to do</h2>
+<ul>
+<li>Never panic in your macro.</li>
+<li>Fix up the user's input. If you know what's coming, use dummy values to fix
+the syntax of your macro's input.</li>
+</ul>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">fn </span><span style="color:#8fa1b3;">my_macro</span><span>(</span><span style="color:#bf616a;">input</span><span>: TokenStream) -&gt; TokenStream {
+</span><span>    </span><span style="color:#b48ead;">let</span><span> input = input.</span><span style="color:#96b5b4;">into_iter</span><span>();
+</span><span>    </span><span style="color:#65737e;">// let field_name = input.next().unwrap(); // NO!
+</span><span>    </span><span style="color:#b48ead;">let</span><span> field_name = input.</span><span style="color:#96b5b4;">next</span><span>()
+</span><span>        .</span><span style="color:#96b5b4;">unwrap_or</span><span>(TokenTree::Ident(Ident::new(&quot;</span><span style="color:#a3be8c;">foo</span><span>&quot;, Span::call_site())));
+</span><span>    </span><span style="color:#65737e;">// Yes! We use a dummy identifier.
+</span><span>    </span><span style="color:#65737e;">// You might want to keep track of errors and show them later with `compile_error!`.
+</span><span>}
+</span></code></pre>
+<h2 id="suggesting-static-data-with-modules-and-constants">Suggesting static data with modules and constants</h2>
+<p>If you want to suggest things that are not part of Rust code but they're
+actually intrinsic to your DSL (lets say standard elements such as <code>&lt;input&gt;</code> for
+HTML), you can use dummy <code>const</code>s in <code>mod</code>s to make Rust Analyzer suggest these things.</p>
+<p>Lets create a <code>html_element!</code> macro to showcase this:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#96b5b4;">macro_rules! </span><span>html_element {
+</span><span>    (</span><span style="color:#bf616a;">$el</span><span>:</span><span style="color:#b48ead;">ident</span><span>) =&gt; {{
+</span><span>        </span><span style="color:#b48ead;">let</span><span> el = stringify!(</span><span style="color:#bf616a;">$el</span><span>);
+</span><span>        format!(&quot;</span><span style="color:#a3be8c;">&lt;</span><span style="color:#d08770;">{el}</span><span style="color:#a3be8c;"> /&gt;</span><span>&quot;)
+</span><span>    }}
+</span><span>}
+</span></code></pre>
+<p>This macro accepts an identifier and returns a string in HTML form. The problem
+is that we don't get any autocompletions. Lets fix this with a bit of trickery:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#65737e;">// Add a module with consts with the identifier we want to suggest
+</span><span style="color:#b48ead;">mod </span><span>__html_elements {
+</span><span>    </span><span style="color:#b48ead;">pub const</span><span> input: () = ();
+</span><span>    </span><span style="color:#b48ead;">pub const</span><span> div: () = ();
+</span><span>    </span><span style="color:#b48ead;">pub const</span><span> a: () = ();
+</span><span>}
+</span><span>
+</span><span style="color:#96b5b4;">macro_rules! </span><span>html_element {
+</span><span>    (</span><span style="color:#bf616a;">$el</span><span>:</span><span style="color:#b48ead;">ident</span><span>) =&gt; {{
+</span><span>        </span><span style="color:#65737e;">// Add a `use` statement to give some contex to Rust Analyzer.
+</span><span>        </span><span style="color:#65737e;">// We add a `cfg` attribute so that we don&#39;t get a compile error
+</span><span>        </span><span style="color:#65737e;">// if `</span><span style="color:#bf616a;">$el</span><span style="color:#65737e;">` is not an element present in `__html_elements`.
+</span><span>        </span><span style="color:#65737e;">// Rust Analyzer seems to ignore the `cfg` for `use` statements;
+</span><span>        #[</span><span style="color:#bf616a;">cfg</span><span>(__never_compiled)]
+</span><span>        </span><span style="color:#b48ead;">use </span><span>__html_elements::</span><span style="color:#bf616a;">$el</span><span>;
+</span><span>
+</span><span>        </span><span style="color:#b48ead;">let</span><span> el = stringify!(</span><span style="color:#bf616a;">$el</span><span>);
+</span><span>        format!(&quot;</span><span style="color:#a3be8c;">&lt;</span><span style="color:#d08770;">{el}</span><span style="color:#a3be8c;"> /&gt;</span><span>&quot;)
+</span><span>    }}
+</span><span>}
+</span></code></pre>
+<p>Now when we use the <code>html_element</code> macro, RA suggests <code>input</code>, <code>div</code> and <code>a</code>.</p>
+<p><img src="https://blog.emi0x7d1.dev/improving-autocompletion-in-your-rust-macros/./ra-completing-html-elements.png" alt="Rust Analyzer suggesting html elements" /></p>
+<p>We can use the same trick for suggesting attributes by nesting modules.</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">mod </span><span>__html_attrs {
+</span><span>    </span><span style="color:#b48ead;">pub mod </span><span>_base {
+</span><span>        </span><span style="color:#b48ead;">pub const</span><span> id: () = ();
+</span><span>        </span><span style="color:#b48ead;">pub const</span><span> class: () = ();
+</span><span>    }
+</span><span>    </span><span style="color:#b48ead;">pub mod </span><span>div {
+</span><span>        </span><span style="color:#b48ead;">pub use </span><span>_base::*;
+</span><span>    }
+</span><span>    </span><span style="color:#b48ead;">pub mod </span><span>a {
+</span><span>        </span><span style="color:#b48ead;">pub use </span><span>_base::**;
+</span><span>        </span><span style="color:#b48ead;">pub use</span><span> href: () = ();
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style="color:#65737e;">// Then, in an imaginary macro, expand like:
+</span><span>__html_attrs::</span><span style="color:#bf616a;">$el</span><span>::</span><span style="color:#bf616a;">$attr</span><span>;
+</span></code></pre>
+<p>This has the advantage of not dealing with complicated types as we'll see below
+and potentially increasing compilation time.</p>
+<h2 id="suggesting-rust-items">Suggesting Rust items</h2>
+<p>This sounds easy but in most cases it's more complicated than it looks like.</p>
+<p>Take Dioxus' <code>rsx</code> macro and its following invokation:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span>rsx! {
+</span><span>    Component {
+</span><span>        |
+</span><span>    </span><span style="color:#65737e;">//  ^ cursor
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>If we ask RA for completions, we get nothing meaningful.</p>
+<p>Lets see why this happens using the following example:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">use </span><span>dioxus::prelude::*;
+</span><span>
+</span><span>#[</span><span style="color:#bf616a;">inline_props</span><span>]
+</span><span style="color:#b48ead;">fn </span><span style="color:#8fa1b3;">Box</span><span>(</span><span style="color:#bf616a;">cx</span><span>: Scope, </span><span style="color:#bf616a;">width</span><span>: </span><span style="color:#b48ead;">i32</span><span>) -&gt; Element {
+</span><span>    cx.</span><span style="color:#96b5b4;">render</span><span>(rsx! {
+</span><span>        &quot;</span><span style="color:#a3be8c;">width = {width}</span><span>&quot;
+</span><span>    })
+</span><span>}
+</span><span>
+</span><span style="color:#b48ead;">fn </span><span style="color:#8fa1b3;">App</span><span>(</span><span style="color:#bf616a;">cx</span><span>: Scope) -&gt; Element {
+</span><span>    cx.</span><span style="color:#96b5b4;">render</span><span>(rsx! {
+</span><span>        Box {
+</span><span>            w|
+</span><span>        </span><span style="color:#65737e;">//  ^ cursor
+</span><span>        }
+</span><span>    })
+</span><span>}
+</span></code></pre>
+<p>I would expect RA suggesting the prop <code>width</code> but we don't. We get arbitrary statements.</p>
+<p><img src="https://blog.emi0x7d1.dev/improving-autocompletion-in-your-rust-macros/./ra-not-suggesting-box-props.png" alt="RA not suggesting Box props" /></p>
+<p>But this is nothing strange if we take a look at the macro expansion. I'll include only the relevant snippet:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span>::dioxus::core::VNode {
+</span><span>    parent: None,
+</span><span>    key: None,
+</span><span>    template: std::cell::Cell::new(</span><span style="color:#d08770;">TEMPLATE</span><span>),
+</span><span>    root_ids: Default::default(),
+</span><span>    dynamic_nodes: __cx.</span><span style="color:#96b5b4;">bump</span><span>().</span><span style="color:#96b5b4;">alloc</span><span>([__cx.</span><span style="color:#96b5b4;">make_node</span><span>(w)]),
+</span><span>    </span><span style="color:#65737e;">//                                               ^ Here is the token we passed!
+</span><span>    dynamic_attrs: __cx.</span><span style="color:#96b5b4;">bump</span><span>().</span><span style="color:#96b5b4;">alloc</span><span>([]),
+</span><span>}
+</span></code></pre>
+<p>The token <code>w</code> actually lands in an &quot;argument context&quot;. So RA suggests anything
+that we can pass to the <code>make_node</code> function.</p>
+<p>Lets make the <code>w</code> token land in a place where RA suggests the <code>width</code> prop. We can do that by using the full syntax for passing props:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">fn </span><span style="color:#8fa1b3;">App</span><span>(</span><span style="color:#bf616a;">cx</span><span>: Scope) -&gt; Element {
+</span><span>    cx.</span><span style="color:#96b5b4;">render</span><span>(rsx! {
+</span><span>        Box {
+</span><span>            w|: </span><span style="color:#d08770;">10</span><span>,
+</span><span>        </span><span style="color:#65737e;">//  ^ cursor
+</span><span>        }
+</span><span>    })
+</span><span>}
+</span></code></pre>
+<p>And now we get the suggestions we want!</p>
+<p><img src="https://blog.emi0x7d1.dev/improving-autocompletion-in-your-rust-macros/./ra-suggesting-box-props.png" alt="Rust Analyzer suggesting Box props" /></p>
+<p>And here's the relevant part of output of the macro expansion:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span>dynamic_nodes: __cx.</span><span style="color:#96b5b4;">bump</span><span>().</span><span style="color:#96b5b4;">alloc</span><span>([__cx.</span><span style="color:#96b5b4;">component</span><span>(
+</span><span>    Box,
+</span><span>    </span><span style="color:#96b5b4;">fc_to_builder</span><span>(Box).</span><span style="color:#96b5b4;">w</span><span>(</span><span style="color:#d08770;">10</span><span>).</span><span style="color:#96b5b4;">build</span><span>(),
+</span><span>    </span><span style="color:#65737e;">//                 ^ Here is the token we passed!
+</span><span>
+</span><span>    </span><span style="color:#65737e;">// fc_to_builder(Box).wintellijRulezz(10).build(),
+</span><span>    </span><span style="color:#65737e;">// ^ When RA passes the dummy macro it looks like this:
+</span><span>
+</span><span>    &quot;</span><span style="color:#a3be8c;">Box</span><span>&quot;,
+</span><span>)]),
+</span></code></pre>
+<p>The <code>fc_to_builder(Box)</code> call returns a builder for the props of <code>Box</code> so it
+makes sense that RA gives the suggestions we want since it uses the expanded
+location of the token as context.</p>
+<p>So, while we are typing, the macro expands to something different to what will
+expand once we finish typing.</p>
+<h3 id="so-how-do-we-fix-it">So how do we fix it?</h3>
+<p>Sadly, I'm not sure we can. There is a problem and it's that the grammar the
+<code>rsx</code> macro accepts is very flexible and we get into a very common problem with
+macros: <strong>The macro is syntactically valid before we finish typing</strong> and it's a
+very hard problem to solve if we want to improve the autocompletion suggestions.</p>
+<p>Consider the following code:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">fn </span><span style="color:#8fa1b3;">App</span><span>(</span><span style="color:#bf616a;">cx</span><span>: Scope) -&gt; Element {
+</span><span>    </span><span style="color:#b48ead;">let</span><span> w = </span><span style="color:#d08770;">10</span><span>;
+</span><span>    cx.</span><span style="color:#96b5b4;">render</span><span>(rsx! {
+</span><span>        Box {
+</span><span>            w|
+</span><span>        </span><span style="color:#65737e;">//  ^ cursor
+</span><span>        }
+</span><span>    })
+</span><span>}
+</span></code></pre>
+<p>We want to suggest the prop <code>width</code> but the macro is already in a valid state
+syntactically and semantically (we are passing the variable <code>w</code>). We cannot
+expand to code that calls <code>fc_to_builder</code> because it will be broken since the
+<code>w</code> method does not exist on it.</p>
+<p>If Rust Analyzer didn't ignore inactive <code>#[cfg]</code> blocks, we could get away with
+using them as we use them with the <code>use</code> statements but it doesn't seem to work
+for other Rust code.</p>
+<p>So my recommendation is:</p>
+<h3 id="make-the-grammar-of-your-macro-as-unambiguous-as-you-can">Make the grammar of your macro as unambiguous as you can.</h3>
+<p>The <code>rsx</code> macro could be written like so:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span>rsx! {
+</span><span>    .prop: value,
+</span><span>    Div {}
+</span><span>    input {}
+</span><span>}
+</span></code></pre>
+<p>In this way, as soon as we type the <code>.</code>, we know what comes is a prop assignment
+and we can eagerly expand to code that RA can make use of.</p>
+<p>This invokation:</p>
+<pre style="background-color:#2b303b;color:#c0c5ce;"><code><span>rsx! {
+</span><span>    Box {
+</span><span>        .
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>would expand to:</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#65737e;">// invoked with the dummy identifier:
+</span><span style="color:#96b5b4;">fc_to_builder</span><span>(Box).intellijRulezz(());
+</span><span>
+</span><span style="color:#65737e;">// invoked normally:
+</span><span style="color:#96b5b4;">fc_to_builder</span><span>(Box).</span><span style="color:#96b5b4;">_noop</span><span>(());
+</span><span style="color:#65737e;">// ^ a `_noop` to fix up the tree with the expansion with the dummy identifier.
+</span></code></pre>
+<p>We then would get correct suggestions.</p>
+<p>We compromised aesthetics for ergonomics (I atleast think so) in a place where
+some completions are very much needed for fast development.</p>
+<hr />
+<p>References:</p>
+<ul>
+<li><a href="https://github.com/rust-lang/rust-analyzer/discussions/15452">Discussion on GH</a></li>
+</ul>
+
+
+<p class="tagsData">
+
+</p>
+
+      </main>
+      <footer>
+        <hr>
+<div class=footContainer>
+  <div class="footLeft">
+    <p>Licensed under <a target="_blank" rel="noopener noreferrer" href="https://fr.wikipedia.org/wiki/Licence_MIT">MIT</a><br>
+      Built with <a target="_blank" rel="noopener noreferrer" href="https://www.getzola.org">Zola</a> using <a target="_blank" rel="noopener noreferrer" href="https://github.com/Speyll/anemone">anemone</a> theme &amp; <a target="_blank" rel="noopener noreferrer" href="https://github.com/Speyll/veqev">veqev</a> colors.<br>
+    </p>
+  </div>
+  
+</div>
+<div class=footContainer>
+  <div class="footLeft">
+    <a href="mailto:emi0x7d1@gmail.com">emi0x7d1@gmail.com</a>
+    <a href="https://github.com/emi0x7d1">github.com/emi0x7d1</a>
+  </div>
+</div>
+      </footer>
+    </div>
+  </body>
+</html>

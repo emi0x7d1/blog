@@ -1,6 +1,7 @@
 # The URL the site will be built for
-base_url = "https://emi0x7d1.com/b"
+base_url = "https://blog.emi0x7d1.dev"
 theme = "anemone"
+output_dir = "docs"
 
 # Whether to automatically compile all Sass files in the sass directory
 compile_sass = true
@@ -16,3 +17,8 @@ highlight_code = true
 [extra]
 list_pages = true
 accent_color = "pink"
+
+[extra.author]
+full_name = "Emilio González"
+email = "emi0x7d1@gmail.com"
+github = "emi0x7d1"

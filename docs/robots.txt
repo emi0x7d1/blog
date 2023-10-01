@@ -1,0 +1,4 @@
+User-agent: *
+Disallow:
+Allow: /
+Sitemap: https://blog.emi0x7d1.dev/sitemap.xml
