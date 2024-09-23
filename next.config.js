@@ -96,5 +96,14 @@ module.exports = () => {
 
       return config
     },
+    async redirects() {
+      return [
+        {
+          source: '/improving-autocompletion-in-your-rust-macros',
+          destination: '/blog/improving-autocompletion-in-your-rust-macros',
+          permanent: true,
+        },
+      ]
+    },
   })
 }
